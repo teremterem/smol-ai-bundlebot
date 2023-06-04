@@ -65,7 +65,7 @@ async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence)
     }
 
     # Send the API request
-    response = openai.ChatCompletion.create(**params)
+    response = await openai.ChatCompletion.acreate(**params)
 
     # Get the reply from the API response
     reply = response.choices[0]["message"]["content"]
