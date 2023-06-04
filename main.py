@@ -229,7 +229,7 @@ bot_manager = InMemoryBotManager()
 @bot_manager.create_bot("HelloWorldBot")
 async def hello_world(bot: MergedBot, conv_sequence: ConversationSequence):
     incoming = await conv_sequence.wait_for_incoming()
-    await conv_sequence.yield_outgoing(await incoming.final_bot_response(bot, "Hello world!"))
+    await conv_sequence.yield_outgoing(await incoming.final_bot_response(bot, f"Hello world! "))
 
 
 async def main():
@@ -238,6 +238,7 @@ async def main():
         channel_specific_id="cli",
         user_display_name="User",
     )
+    print("Type something:")
     user_message = await bot_manager.create_originator_message(
         channel_type="cli",
         channel_id="cli",
