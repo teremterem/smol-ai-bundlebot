@@ -238,7 +238,7 @@ async def main():
         channel_specific_id="cli",
         user_display_name="User",
     )
-    print("Type something:")
+    print("Type something: ", end="")
     user_message = await bot_manager.create_originator_message(
         channel_type="cli",
         channel_id="cli",
