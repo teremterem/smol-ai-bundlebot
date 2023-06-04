@@ -174,7 +174,7 @@ do not add any other explanation, only return a python list of strings.""",
     # TODO send this to the UserProxyBot
     print(filepaths_string)
 
-    async def call_file_generation_bot(_file: str) -> tuple[str, str]:
+    async def call_file_generation_bot(_file: str) -> None:
         file_responses = await generate_file.bot.list_responses(
             # TODO send this as a "message bundle"
             await bot.manager.create_originator_message(
@@ -192,7 +192,7 @@ do not add any other explanation, only return a python list of strings.""",
         )
         filename = file_responses[0].content
         filecode = file_responses[1].content
-        return filename, filecode
+        write_file(filename, filecode, directory)
 
     # parse the result into a python list
     list_actual = []
@@ -206,8 +206,7 @@ do not add any other explanation, only return a python list of strings.""",
                 shared_dependencies = shared_dependencies_file.read()
 
         if file is not None:
-            filename, filecode = await call_file_generation_bot(file)
-            write_file(filename, filecode, directory)
+            await call_file_generation_bot(file)
         else:
             clean_dir(directory)
 
@@ -220,13 +219,13 @@ do not add any other explanation, only return a python list of strings.""",
                     originator=bot,
                     custom_fields={
                         "model": model,
-                        "system_prompt": f"""You are an AI developer who is trying to write a program that will \
+                        "system_prompt": """You are an AI developer who is trying to write a program that will \
 generate code for the user based on their intent.
 
 In response to the user's prompt:
 
 ---
-the app is: {{prompt}}
+the app is: {prompt}
 ---
 
 the files we have decided to generate are: {filepaths_string}
@@ -248,13 +247,7 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
-            tasks = [call_file_generation_bot(f) for f in list_actual]
-            # gather tasks
-            results: list[tuple[str, str]] = await asyncio.gather(*tasks)
-
-            # Iterate over generated files and write them to the specified directory
-            for filename, filecode in results:
-                write_file(filename, filecode, directory)
+            await asyncio.gather(call_file_generation_bot(f) for f in list_actual)
 
     except ValueError:
         # TODO send this to the UserProxyBot
@@ -319,7 +312,7 @@ async def main():
         originator=user,
         content=prompt,
         custom_fields={
-            # "model": "gpt-4",
+            "model": "gpt-4",
             "directory": directory,
             "file": file,
         },
