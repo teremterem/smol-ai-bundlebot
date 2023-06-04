@@ -89,7 +89,7 @@ async def generate_file(bot: MergedBot, conv_sequence: ConversationSequence):
     print("file", filename)
 
     # call openai api with this prompt
-    filecode = await generate_response.bot.get_final_response(
+    filecode_msg = await generate_response.bot.get_final_response(
         # TODO send this as a "message bundle"
         await bot.manager.create_originator_message(
             channel_type="bot-to-bot",
@@ -132,7 +132,7 @@ Begin generating the code now.""",
     )
 
     conv_sequence.yield_outgoing(await request.interim_bot_response(bot, filename))
-    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode))
+    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode_msg.code))
 
 
 @bot_manager.create_bot("SmolAI")
