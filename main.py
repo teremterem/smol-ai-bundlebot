@@ -144,10 +144,10 @@ async def smol_ai(bot: MergedBot, conv_sequence: ConversationSequence):
                 "model": model,
                 "system_prompt": """You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
-        
+
 When given their intent, create a complete, exhaustive list of filepaths that the user would write to make the \
 program.
-    
+
 only list the filepaths you would write, and return them as a python list of strings. 
 do not add any other explanation, only return a python list of strings.""",
             },
@@ -156,8 +156,9 @@ do not add any other explanation, only return a python list of strings.""",
     )
     filepaths_string = filepaths_msg.content
 
+    # TODO send this to the UserProxyBot
     print(filepaths_string)
-    return
+
     # parse the result into a python list
     list_actual = []
     try:
@@ -172,35 +173,51 @@ do not add any other explanation, only return a python list of strings.""",
         if file is not None:
             # check file
             print("file", file)
-            filename, filecode = generate_file(file, model=model, filepaths_string=filepaths_string,
-                                               shared_dependencies=shared_dependencies, prompt=prompt)
+            filename, filecode = generate_file(
+                file,
+                model=model,
+                filepaths_string=filepaths_string,
+                shared_dependencies=shared_dependencies,
+                prompt=prompt,
+            )
             write_file(filename, filecode, directory)
         else:
             clean_dir(directory)
 
             # understand shared dependencies
-            shared_dependencies = generate_response.call(
-                model,
-                f"""You are an AI developer who is trying to write a program that will generate code for the user \
-based on their intent.
-                
-            In response to the user's prompt:
+            shared_dependencies_msg = await generate_response.bot.get_final_response(
+                # TODO send this as a "message bundle"
+                await bot.manager.create_originator_message(
+                    channel_type="bot-to-bot",
+                    channel_id=str(uuid4()),
+                    originator=bot,
+                    custom_fields={
+                        "model": model,
+                        "system_prompt": f"""You are an AI developer who is trying to write a program that will \
+generate code for the user based on their intent.
 
-            ---
-            the app is: {{prompt}}
-            ---
-            
-            the files we have decided to generate are: {filepaths_string}
+In response to the user's prompt:
 
-            Now that we have a list of files, we need to understand what dependencies they share.
-            Please name and briefly describe what is shared between the files we are generating, including exported \
+---
+the app is: {{prompt}}
+---
+
+the files we have decided to generate are: {filepaths_string}
+
+Now that we have a list of files, we need to understand what dependencies they share.
+Please name and briefly describe what is shared between the files we are generating, including exported \
 variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and \
 function names.
-            Exclusively focus on the names of the shared dependencies, and do not add any other explanation.
-            """,
-                prompt,
+Exclusively focus on the names of the shared dependencies, and do not add any other explanation.""",
+                    },
+                    content=prompt,
+                )
             )
+            shared_dependencies = shared_dependencies_msg.content
+
+            # TODO send this to the UserProxyBot
             print(shared_dependencies)
+            return
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
