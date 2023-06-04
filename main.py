@@ -247,7 +247,7 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
-            await asyncio.gather(call_file_generation_bot(f) for f in list_actual)
+            await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
 
     except ValueError:
         # TODO send this to the UserProxyBot
