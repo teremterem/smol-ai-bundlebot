@@ -132,7 +132,7 @@ Begin generating the code now.""",
     )
 
     conv_sequence.yield_outgoing(await request.interim_bot_response(bot, filename))
-    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode_msg.code))
+    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode_msg.content))
 
 
 @bot_manager.create_bot("SmolAI")
