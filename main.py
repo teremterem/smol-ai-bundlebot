@@ -30,8 +30,8 @@ def generate_response(model, system_prompt, user_prompt, *args):
         print("\033[37m" + str(len(encoding.encode(prompt))) + " tokens\033[0m" + " in prompt: " + "\033[92m" + prompt[:50] + "\033[0m" + ("..." if len(prompt) > 50 else ""))
         
 
-    # # Set up your OpenAI API credentials
-    # openai.api_key = os.environ["OPENAI_API_KEY"]
+    # Set up your OpenAI API credentials
+    openai.api_key = os.environ["OPENAI_API_KEY"]
 
     messages = []
     messages.append({"role": "system", "content": system_prompt})
