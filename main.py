@@ -1,11 +1,19 @@
-import os
-import modal
 import ast
-from utils import clean_dir
-from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
+import asyncio
+import os
 
-stub = modal.Stub("smol-developer-v1") # yes we are recommending using Modal by default, as it helps with deployment. see readme for why.
+import modal
+from mergedbots import InMemoryBotManager, MergedBot
+from mergedbots.experimental.sequential import ConversationSequence
+
+from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
+from utils import clean_dir
+
+stub = modal.Stub(
+    "smol-developer-v1"
+)  # yes we are recommending using Modal by default, as it helps with deployment. see readme for why.
 openai_image = modal.Image.debian_slim().pip_install("openai", "tiktoken", "promptlayer")
+
 
 @stub.function(
     image=openai_image,
@@ -15,20 +23,26 @@ openai_image = modal.Image.debian_slim().pip_install("openai", "tiktoken", "prom
         backoff_coefficient=2.0,
         initial_delay=1.0,
     ),
-    concurrency_limit=5, # many users report rate limit issues (https://github.com/smol-ai/developer/issues/10) so we try to do this but it is still inexact. would like ideas on how to improve
+    concurrency_limit=5,
+    # many users report rate limit issues (https://github.com/smol-ai/developer/issues/10) so we try to do this but
+    # it is still inexact. would like ideas on how to improve
     timeout=120,
 )
 def generate_response(model, system_prompt, user_prompt, *args):
-    # IMPORTANT: Keep import statements here due to Modal container restrictions https://modal.com/docs/guide/custom-container#additional-python-packages
+    # IMPORTANT: Keep import statements here due to Modal container restrictions
+    # https://modal.com/docs/guide/custom-container#additional-python-packages
     import tiktoken
     import promptlayer
     openai = promptlayer.openai
 
     def reportTokens(prompt):
         encoding = tiktoken.encoding_for_model(model)
-        # print number of tokens in light gray, with first 50 characters of prompt in green. if truncated, show that it is truncated
-        print("\033[37m" + str(len(encoding.encode(prompt))) + " tokens\033[0m" + " in prompt: " + "\033[92m" + prompt[:50] + "\033[0m" + ("..." if len(prompt) > 50 else ""))
-        
+        # print number of tokens in light gray, with first 50 characters of prompt in green. if truncated, show that
+        # it is truncated
+        print(
+            "\033[37m" + str(len(encoding.encode(prompt))) + " tokens\033[0m" + " in prompt: " + "\033[92m" +
+            prompt[:50] + "\033[0m" + ("..." if len(prompt) > 50 else "")
+        )
 
     # Set up your OpenAI API credentials
     openai.api_key = os.environ["OPENAI_API_KEY"]
@@ -63,8 +77,10 @@ def generate_response(model, system_prompt, user_prompt, *args):
 @stub.function()
 def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
     # call openai api with this prompt
-    filecode = generate_response.call(model, 
-        f"""You are an AI developer who is trying to write a program that will generate code for the user based on their intent.
+    filecode = generate_response.call(
+        model,
+        f"""You are an AI developer who is trying to write a program that will generate code for the user based on \
+their intent.
         
     the app is: {prompt}
 
@@ -83,7 +99,8 @@ def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_d
     Remember that you must obey 3 things: 
        - you are generating code for the file {filename}
        - do not stray from the names of the files and the shared dependencies we have decided on
-       - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid code. Do not include code fences in your response, for example
+       - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid \
+code. Do not include code fences in your response, for example
     
     Bad response:
     ```javascript 
@@ -102,7 +119,7 @@ def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_d
 
 
 @stub.local_entrypoint()
-def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
+def main2(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
     # read file from prompt if it ends in a .md filetype
     if prompt.endswith(".md"):
         with open(prompt, "r") as promptfile:
@@ -113,10 +130,13 @@ def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
     print("\033[92m" + prompt + "\033[0m")
 
     # call openai api with this prompt
-    filepaths_string = generate_response.call(model, 
-        """You are an AI developer who is trying to write a program that will generate code for the user based on their intent.
+    filepaths_string = generate_response.call(
+        model,
+        """You are an AI developer who is trying to write a program that will generate code for the user based on \
+their intent.
         
-    When given their intent, create a complete, exhaustive list of filepaths that the user would write to make the program.
+    When given their intent, create a complete, exhaustive list of filepaths that the user would write to make the \
+program.
     
     only list the filepaths you would write, and return them as a python list of strings. 
     do not add any other explanation, only return a python list of strings.
@@ -138,14 +158,17 @@ def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
         if file is not None:
             # check file
             print("file", file)
-            filename, filecode = generate_file(file, model=model, filepaths_string=filepaths_string, shared_dependencies=shared_dependencies, prompt=prompt)
+            filename, filecode = generate_file(file, model=model, filepaths_string=filepaths_string,
+                                               shared_dependencies=shared_dependencies, prompt=prompt)
             write_file(filename, filecode, directory)
         else:
             clean_dir(directory)
 
             # understand shared dependencies
-            shared_dependencies = generate_response.call(model, 
-                f"""You are an AI developer who is trying to write a program that will generate code for the user based on their intent.
+            shared_dependencies = generate_response.call(
+                model,
+                f"""You are an AI developer who is trying to write a program that will generate code for the user \
+based on their intent.
                 
             In response to the user's prompt:
 
@@ -156,7 +179,9 @@ def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
             the files we have decided to generate are: {filepaths_string}
 
             Now that we have a list of files, we need to understand what dependencies they share.
-            Please name and briefly describe what is shared between the files we are generating, including exported variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and function names.
+            Please name and briefly describe what is shared between the files we are generating, including exported \
+variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and \
+function names.
             Exclusively focus on the names of the shared dependencies, and do not add any other explanation.
             """,
                 prompt,
@@ -164,13 +189,14 @@ def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
             print(shared_dependencies)
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
-            
+
             # Iterate over generated files and write them to the specified directory
             for filename, filecode in generate_file.map(
-                list_actual, order_outputs=False, kwargs=dict(model=model, filepaths_string=filepaths_string, shared_dependencies=shared_dependencies, prompt=prompt)
+                list_actual, order_outputs=False,
+                kwargs=dict(model=model, filepaths_string=filepaths_string, shared_dependencies=shared_dependencies,
+                            prompt=prompt)
             ):
                 write_file(filename, filecode, directory)
-
 
     except ValueError:
         print("Failed to parse result")
@@ -180,19 +206,47 @@ def write_file(filename, filecode, directory):
     # Output the filename in blue color
     print("\033[94m" + filename + "\033[0m")
     print(filecode)
-    
+
     file_path = os.path.join(directory, filename)
-    dir = os.path.dirname(file_path)
+    _dir = os.path.dirname(file_path)
 
     # Check if the filename is actually a directory
     if os.path.isdir(file_path):
         print(f"Error: {filename} is a directory, not a file.")
         return
 
-    os.makedirs(dir, exist_ok=True)
+    os.makedirs(_dir, exist_ok=True)
 
     # Open the file in write mode
     with open(file_path, "w") as file:
         # Write content to the file
         file.write(filecode)
 
+
+bot_manager = InMemoryBotManager()
+
+
+@bot_manager.create_bot("HelloWorldBot")
+async def hello_world(bot: MergedBot, conv_sequence: ConversationSequence):
+    incoming = await conv_sequence.wait_for_incoming()
+    await conv_sequence.yield_outgoing(await incoming.final_bot_response(bot, "Hello world!"))
+
+
+async def main():
+    user = await bot_manager.find_or_create_user(
+        channel_type="cli",
+        channel_specific_id="cli",
+        user_display_name="User",
+    )
+    user_message = await bot_manager.create_originator_message(
+        channel_type="cli",
+        channel_id="cli",
+        originator=user,
+        content=input(),
+    )
+    async for response in hello_world.bot.fulfill(user_message):
+        print(response.content)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
