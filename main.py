@@ -26,17 +26,14 @@ bot_manager = InMemoryBotManager()
 
 @bot_manager.create_bot("ResponseGenerator")
 async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence):
+    request = await conv_sequence.wait_for_incoming()
     # TODO think how to implement `concurrency_limit=5`
     # TODO wait for a "message bundle" of multiple messages (sys_prompt, user_prompt, args etc) ?
     #  or maybe employ some sort of "FormFillingBot" ?
-    request = await conv_sequence.wait_for_incoming()
     user_prompt = request.content
     system_prompt = request.custom_fields.get("system_prompt")
     args = request.custom_fields.get("args") or []
     model = request.custom_fields.get("model") or DEFAULT_MODEL
-
-    # IMPORTANT: Keep import statements here due to Modal container restrictions
-    # https://modal.com/docs/guide/custom-container#additional-python-packages
 
     def reportTokens(prompt):
         encoding = tiktoken.encoding_for_model(model)
@@ -76,48 +73,66 @@ async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence)
     conv_sequence.yield_outgoing(await request.final_bot_response(bot, reply))
 
 
-# @stub.function()
-def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
+# def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
+@bot_manager.create_bot("FileGenerator")
+async def generate_file(bot: MergedBot, conv_sequence: ConversationSequence):
+    request = await conv_sequence.wait_for_incoming()
+    # TODO wait for a "message bundle" of multiple messages ?
+    #  or maybe employ some sort of "FormFillingBot" ?
+    filename = request.content
+    model = request.custom_fields.get("model") or DEFAULT_MODEL
+    filepaths_string = request.custom_fields.get("filepaths_string")
+    shared_dependencies = request.custom_fields.get("shared_dependencies")
+    prompt = request.custom_fields.get("prompt")
+
+    # TODO send this to the UserProxyBot
+    print("file", filename)
+
     # call openai api with this prompt
-    filecode = generate_response.call(
-        model,
-        f"""You are an AI developer who is trying to write a program that will generate code for the user based on \
+    filecode = await generate_response.bot.get_final_response(
+        # TODO send this as a "message bundle"
+        await bot.manager.create_originator_message(
+            channel_type="bot-to-bot",
+            channel_id=str(uuid4()),
+            originator=bot,
+            custom_fields={
+                "model": model,
+                "system_prompt": f"""You are an AI developer who is trying to write a program that will generate code for the user based on \
 their intent.
-        
-    the app is: {prompt}
 
-    the files we have decided to generate are: {filepaths_string}
+the app is: {prompt}
 
-    the shared dependencies (like filenames and variable names) we have decided on are: {shared_dependencies}
-    
-    only write valid code for the given filepath and file type, and return only the code.
-    do not add any other explanation, only return valid code for that file type.
-    """,
-        f"""
-    We have broken up the program into per-file generation. 
-    Now your job is to generate only the code for the file {filename}. 
-    Make sure to have consistent filenames if you reference other files we are also generating.
-    
-    Remember that you must obey 3 things: 
-       - you are generating code for the file {filename}
-       - do not stray from the names of the files and the shared dependencies we have decided on
-       - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid \
+the files we have decided to generate are: {filepaths_string}
+
+the shared dependencies (like filenames and variable names) we have decided on are: {shared_dependencies}
+
+only write valid code for the given filepath and file type, and return only the code.
+do not add any other explanation, only return valid code for that file type.""",
+            },
+            content=f"""We have broken up the program into per-file generation.
+Now your job is to generate only the code for the file {filename}.
+Make sure to have consistent filenames if you reference other files we are also generating.
+
+Remember that you must obey 3 things:
+   - you are generating code for the file {filename}
+   - do not stray from the names of the files and the shared dependencies we have decided on
+   - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid \
 code. Do not include code fences in your response, for example
-    
-    Bad response:
-    ```javascript 
-    console.log("hello world")
-    ```
-    
-    Good response:
-    console.log("hello world")
-    
-    Begin generating the code now.
 
-    """,
+Bad response:
+```javascript
+console.log("hello world")
+```
+
+Good response:
+console.log("hello world")
+
+Begin generating the code now.""",
+        )
     )
 
-    return filename, filecode
+    conv_sequence.yield_outgoing(await request.interim_bot_response(bot, filename))
+    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode))
 
 
 @bot_manager.create_bot("SmolAI")
@@ -159,6 +174,26 @@ do not add any other explanation, only return a python list of strings.""",
     # TODO send this to the UserProxyBot
     print(filepaths_string)
 
+    async def call_file_generation_bot(_file: str) -> tuple[str, str]:
+        file_responses = await generate_response.bot.list_responses(
+            # TODO send this as a "message bundle"
+            await bot.manager.create_originator_message(
+                channel_type="bot-to-bot",
+                channel_id=str(uuid4()),
+                originator=bot,
+                content=_file,
+                custom_fields={
+                    "model": model,
+                    "filepaths_string": filepaths_string,
+                    "shared_dependencies": shared_dependencies,
+                    "prompt": prompt,
+                },
+            )
+        )
+        filename = file_responses[0].content
+        filecode = file_responses[1].content
+        return filename, filecode
+
     # parse the result into a python list
     list_actual = []
     try:
@@ -171,15 +206,7 @@ do not add any other explanation, only return a python list of strings.""",
                 shared_dependencies = shared_dependencies_file.read()
 
         if file is not None:
-            # check file
-            print("file", file)
-            filename, filecode = generate_file(
-                file,
-                model=model,
-                filepaths_string=filepaths_string,
-                shared_dependencies=shared_dependencies,
-                prompt=prompt,
-            )
+            filename, filecode = await call_file_generation_bot(file)
             write_file(filename, filecode, directory)
         else:
             clean_dir(directory)
@@ -217,19 +244,20 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
 
             # TODO send this to the UserProxyBot
             print(shared_dependencies)
-            return
+
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
+            tasks = [asyncio.create_task(call_file_generation_bot(f)) for f in list_actual]
+            # gather tasks
+            results: list[tuple[str, str]] = await asyncio.gather(*tasks)
+
             # Iterate over generated files and write them to the specified directory
-            for filename, filecode in generate_file.map(
-                list_actual, order_outputs=False,
-                kwargs=dict(model=model, filepaths_string=filepaths_string, shared_dependencies=shared_dependencies,
-                            prompt=prompt)
-            ):
+            for filename, filecode in results:
                 write_file(filename, filecode, directory)
 
     except ValueError:
+        # TODO send this to the UserProxyBot
         print("Failed to parse result")
 
 
