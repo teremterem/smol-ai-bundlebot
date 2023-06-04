@@ -175,7 +175,7 @@ do not add any other explanation, only return a python list of strings.""",
     print(filepaths_string)
 
     async def call_file_generation_bot(_file: str) -> tuple[str, str]:
-        file_responses = await generate_response.bot.list_responses(
+        file_responses = await generate_file.bot.list_responses(
             # TODO send this as a "message bundle"
             await bot.manager.create_originator_message(
                 channel_type="bot-to-bot",
@@ -248,7 +248,7 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
-            tasks = [asyncio.create_task(call_file_generation_bot(f)) for f in list_actual]
+            tasks = [call_file_generation_bot(f) for f in list_actual]
             # gather tasks
             results: list[tuple[str, str]] = await asyncio.gather(*tasks)
 
