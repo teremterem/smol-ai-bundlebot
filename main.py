@@ -150,7 +150,7 @@ def main(prompt, directory=DEFAULT_DIR, model=DEFAULT_MODEL, file=None):
             In response to the user's prompt:
 
             ---
-            the app is: {prompt}
+            the app is: {{prompt}}
             ---
             
             the files we have decided to generate are: {filepaths_string}
