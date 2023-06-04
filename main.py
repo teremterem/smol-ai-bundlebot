@@ -229,7 +229,7 @@ bot_manager = InMemoryBotManager()
 @bot_manager.create_bot("HelloWorldBot")
 async def hello_world(bot: MergedBot, conv_sequence: ConversationSequence):
     incoming = await conv_sequence.wait_for_incoming()
-    await conv_sequence.yield_outgoing(await incoming.final_bot_response(bot, f"Hello world! "))
+    await conv_sequence.yield_outgoing(await incoming.final_bot_response(bot, f"Hello world! {incoming.content}"))
 
 
 async def main():
