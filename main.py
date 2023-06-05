@@ -103,6 +103,8 @@ async def generate_file(bot: MergedBot, conv_sequence: ConversationSequence):
             channel_id=str(uuid4()),
             originator=bot,
             custom_fields={
+                "human_channel_type": request.custom_fields["human_channel_type"],
+                "human_channel_id": request.custom_fields["human_channel_id"],
                 "model": model,
                 "system_prompt": f"""You are an AI developer who is trying to write a program that will generate code for the user based on \
 their intent.
@@ -163,6 +165,8 @@ async def smol_ai(bot: MergedBot, conv_sequence: ConversationSequence):
             channel_id=str(uuid4()),
             originator=bot,
             custom_fields={
+                "human_channel_type": request.custom_fields["human_channel_type"],
+                "human_channel_id": request.custom_fields["human_channel_id"],
                 "model": model,
                 "system_prompt": """You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
@@ -190,6 +194,8 @@ do not add any other explanation, only return a python list of strings.""",
                 originator=bot,
                 content=_file,
                 custom_fields={
+                    "human_channel_type": request.custom_fields["human_channel_type"],
+                    "human_channel_id": request.custom_fields["human_channel_id"],
                     "model": model,
                     "filepaths_string": filepaths_string,
                     "shared_dependencies": shared_dependencies,
@@ -224,6 +230,8 @@ do not add any other explanation, only return a python list of strings.""",
                     channel_id=str(uuid4()),
                     originator=bot,
                     custom_fields={
+                        "human_channel_type": request.custom_fields["human_channel_type"],
+                        "human_channel_id": request.custom_fields["human_channel_id"],
                         "model": model,
                         "system_prompt": """You are an AI developer who is trying to write a program that will \
 generate code for the user based on their intent.
@@ -308,7 +316,9 @@ async def main(bot: MergedBot, conv_sequence: ConversationSequence):
         originator=bot,
         content=prompt,
         custom_fields={
-            # "model": "gpt-4",
+            "human_channel_type": prompt_msg.channel_type,
+            "human_channel_id": prompt_msg.channel_id,
+            "model": "gpt-4",
             "directory": directory,
             "file": file,
         },
