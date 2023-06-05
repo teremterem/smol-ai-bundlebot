@@ -2,6 +2,7 @@ import ast
 import asyncio
 import os
 import traceback
+from pprint import pformat
 from uuid import uuid4
 
 import discord
@@ -252,7 +253,15 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
-            await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
+            conv_sequence.yield_outgoing(
+                await request.interim_bot_response(
+                    bot,
+                    pformat(await asyncio.gather(
+                        *[call_file_generation_bot(f) for f in list_actual],
+                        return_exceptions=True,
+                    )),
+                )
+            )
 
             conv_sequence.yield_outgoing(await request.final_bot_response(bot, "DONE!"))
     except ValueError:
