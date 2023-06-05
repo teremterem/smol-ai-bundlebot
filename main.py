@@ -255,8 +255,17 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             )
             shared_dependencies = shared_dependencies_msg.content
 
-            # TODO send this to the UserProxyBot
-            print(shared_dependencies)
+            async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
+                channel_type="bot-to-human",
+                channel_id=str(uuid4()),
+                originator=bot,
+                content=shared_dependencies,
+                custom_fields={
+                    "human_channel_type": request.custom_fields["human_channel_type"],
+                    "human_channel_id": request.custom_fields["human_channel_id"],
+                },
+            )):
+                conv_sequence.yield_outgoing(usr_msg)
 
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
