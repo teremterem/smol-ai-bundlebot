@@ -1,14 +1,17 @@
 import ast
 import asyncio
 import os
-import sys
+import traceback
 from uuid import uuid4
 
+import discord
 import promptlayer
 import tiktoken
 from dotenv import load_dotenv
 from mergedbots import InMemoryBotManager, MergedBot
 from mergedbots.experimental.sequential import ConversationSequence
+from mergedbots.experimental.two_way_bot import TwoWayBotWrapper
+from mergedbots.ext.discord_integration import MergedBotDiscord
 
 from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
 from utils import clean_dir
@@ -16,6 +19,9 @@ from utils import clean_dir
 load_dotenv()
 
 promptlayer.api_key = os.environ["PROMPTLAYER_API_KEY"]
+DISCORD_BOT_SECRET = os.environ["DISCORD_BOT_SECRET"]
+
+discord_client = discord.Client(intents=discord.Intents.default())
 
 openai = promptlayer.openai
 # Set up your OpenAI API credentials
@@ -194,9 +200,8 @@ do not add any other explanation, only return a python list of strings.""",
         filecode = file_responses[1].content
         write_file(filename, filecode, directory)
 
-    # parse the result into a python list
-    list_actual = []
     try:
+        # parse the result into a python list
         list_actual = ast.literal_eval(filepaths_string)
 
         # if shared_dependencies.md is there, read it in, else set it to None
@@ -249,9 +254,10 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
 
             await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
 
+            conv_sequence.yield_outgoing(await request.final_bot_response(bot, "DONE!"))
     except ValueError:
-        # TODO send this to the UserProxyBot
-        print("Failed to parse result")
+        conv_sequence.yield_outgoing(await request.interim_bot_response(bot, "Failed to parse result"))
+        conv_sequence.yield_outgoing(await request.final_bot_response(bot, traceback.format_exc()))
 
 
 def write_file(filename, filecode, directory):
@@ -275,52 +281,49 @@ def write_file(filename, filecode, directory):
         file.write(filecode)
 
 
-async def main():
-    # Check for arguments
-    if len(sys.argv) < 2:
-
-        # Looks like we don't have a prompt. Check if prompt.md exists
-        if not os.path.exists("prompt.md"):
-            # Still no? Then we can't continue
-            print("Please provide a prompt")
-            sys.exit(1)
-
-        # Still here? Assign the prompt file name to prompt
-        prompt = "prompt.md"
-
-    else:
-        # Set prompt to the first argument
-        prompt = sys.argv[1]
-
-    # Pull everything else as normal
-    directory = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_DIR
-    file = sys.argv[3] if len(sys.argv) > 3 else None
+@bot_manager.create_bot("MainBot")
+async def main(bot: MergedBot, conv_sequence: ConversationSequence):
+    prompt_msg = await conv_sequence.wait_for_incoming()
+    prompt = prompt_msg.content
+    directory = DEFAULT_DIR
+    file = None
 
     # read file from prompt if it ends in a .md filetype
     if prompt.endswith(".md"):
         with open(prompt, "r") as promptfile:
             prompt = promptfile.read()
 
-    user = await bot_manager.find_or_create_user(
-        channel_type="cli",
-        channel_specific_id="cli",
-        user_display_name="User",
-    )
-    user_message = await bot_manager.create_originator_message(
-        channel_type="cli",
-        channel_id="cli",
-        originator=user,
+    user_message = await bot.manager.create_originator_message(
+        channel_type="bot-to-bot",
+        channel_id=str(uuid4()),
+        originator=bot,
         content=prompt,
         custom_fields={
-            "model": "gpt-4",
+            # "model": "gpt-4",
             "directory": directory,
             "file": file,
         },
     )
     # Run the main function
     async for response in smol_ai.bot.fulfill(user_message):
-        print(response.content)
+        conv_sequence.yield_outgoing(response)
+
+
+two_way_bot_wrapper = TwoWayBotWrapper(
+    manager=bot_manager,
+    this_bot_handle="TwoWayBot",
+    target_bot_handle=main.bot.handle,
+    feedback_bot_handle="FeedbackBot",
+)
+
+
+@discord_client.event
+async def on_ready() -> None:
+    """Called when the client is done preparing the data received from Discord."""
+    print("Logged in as", discord_client.user)
+    print()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    MergedBotDiscord(bot=two_way_bot_wrapper.this_bot, discord_client=discord_client)
+    discord_client.run(DISCORD_BOT_SECRET)
