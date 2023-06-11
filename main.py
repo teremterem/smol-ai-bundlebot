@@ -8,11 +8,9 @@ from uuid import uuid4
 import discord
 import promptlayer
 import tiktoken
+from botmerger import InMemoryBotMerger, SingleTurnContext
+from botmerger.ext.discord_integration import attach_bot_to_discord
 from dotenv import load_dotenv
-from mergedbots import InMemoryBotManager, MergedBot
-from mergedbots.experimental.sequential import ConversationSequence
-from mergedbots.experimental.two_way_bot import TwoWayBotWrapper
-from mergedbots.ext.discord_integration import MergedBotDiscord
 
 from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
 from utils import clean_dir
@@ -28,11 +26,11 @@ openai = promptlayer.openai
 # Set up your OpenAI API credentials
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
-bot_manager = InMemoryBotManager()
+merger = InMemoryBotMerger()
 
 
-@bot_manager.create_bot("ResponseGenerator")
-async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence):
+@merger.create_bot("ResponseGenerator")
+async def generate_response(context: SingleTurnContext) -> None:
     request = await conv_sequence.wait_for_incoming()
     # TODO think how to implement `concurrency_limit=5`
     # TODO wait for a "message bundle" of multiple messages (sys_prompt, user_prompt, args etc) ?
@@ -81,8 +79,8 @@ async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence)
 
 
 # def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
-@bot_manager.create_bot("FileGenerator")
-async def generate_file(bot: MergedBot, conv_sequence: ConversationSequence):
+@merger.create_bot("FileGenerator")
+async def generate_file(context: SingleTurnContext) -> None:
     request = await conv_sequence.wait_for_incoming()
     # TODO wait for a "message bundle" of multiple messages ?
     #  or maybe employ some sort of "FormFillingBot" ?
@@ -144,8 +142,8 @@ Begin generating the code now.""",
     conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode_msg.content))
 
 
-@bot_manager.create_bot("SmolAI")
-async def smol_ai(bot: MergedBot, conv_sequence: ConversationSequence):
+@merger.create_bot("SmolAI")
+async def smol_ai(context: SingleTurnContext) -> None:
     request = await conv_sequence.wait_for_incoming()
     prompt = request.content
     directory = request.custom_fields.get("directory") or DEFAULT_DIR
@@ -307,8 +305,8 @@ def write_file(filename, filecode, directory):
         file.write(filecode)
 
 
-@bot_manager.create_bot("MainBot")
-async def main(bot: MergedBot, conv_sequence: ConversationSequence):
+@merger.create_bot("MainBot")
+async def main(context: SingleTurnContext) -> None:
     prompt_msg = await conv_sequence.wait_for_incoming()
     prompt = prompt_msg.content
     directory = DEFAULT_DIR
@@ -337,12 +335,13 @@ async def main(bot: MergedBot, conv_sequence: ConversationSequence):
         conv_sequence.yield_outgoing(response)
 
 
-two_way_bot_wrapper = TwoWayBotWrapper(
-    manager=bot_manager,
-    this_bot_handle="TwoWayBot",
-    target_bot_handle=main.bot.handle,
-    feedback_bot_handle="FeedbackBot",
-)
+# # TODO ?
+# two_way_bot_wrapper = TwoWayBotWrapper(
+#     manager=bot_manager,
+#     this_bot_handle="TwoWayBot",
+#     target_bot_handle=main.bot.handle,
+#     feedback_bot_handle="FeedbackBot",
+# )
 
 
 @discord_client.event
@@ -353,5 +352,5 @@ async def on_ready() -> None:
 
 
 if __name__ == "__main__":
-    MergedBotDiscord(bot=two_way_bot_wrapper.this_bot, discord_client=discord_client)
+    attach_bot_to_discord(main.bot, discord_client)
     discord_client.run(DISCORD_BOT_SECRET)
