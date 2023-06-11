@@ -2,7 +2,6 @@ import ast
 import asyncio
 import os
 import traceback
-from pprint import pformat
 
 import discord
 import promptlayer
@@ -231,15 +230,6 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             # write shared dependencies as a md file inside the generated directory
             write_file("shared_dependencies.md", shared_dependencies, directory)
 
-            await context.yield_response(
-                pformat(
-                    await asyncio.gather(
-                        *[call_file_generation_bot(f) for f in list_actual],
-                        return_exceptions=True,
-                    )
-                ),
-                show_typing_indicator=True,
-            )
             await context.yield_response("DONE!")
     except ValueError:
         await context.yield_response("Failed to parse result", show_typing_indicator=True)
