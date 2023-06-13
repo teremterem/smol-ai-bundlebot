@@ -9,6 +9,7 @@ import tiktoken
 from botmerger import InMemoryBotMerger, SingleTurnContext
 from botmerger.ext.discord_integration import attach_bot_to_discord
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
 from utils import clean_dir
@@ -27,16 +28,19 @@ openai.api_key = os.environ["OPENAI_API_KEY"]
 merger = InMemoryBotMerger()
 
 
+class GenerateResponse(BaseModel):
+    user_prompt: str
+    system_prompt: str
+    args: list[str] = Field(default_factory=list)
+    model: str = DEFAULT_MODEL
+
+
 @merger.create_bot("ResponseGenerator")
 async def generate_response(context: SingleTurnContext) -> None:
-    # TODO think how to implement `concurrency_limit=5`
-    user_prompt = context.request.content["user_prompt"]
-    system_prompt = context.request.content.get("system_prompt")
-    args = context.request.content.get("args") or []
-    model = context.request.content.get("model") or DEFAULT_MODEL
+    data = GenerateResponse(**context.request.content)
 
     def reportTokens(prompt):
-        encoding = tiktoken.encoding_for_model(model)
+        encoding = tiktoken.encoding_for_model(data.model)
         # print number of tokens in light gray, with first 50 characters of prompt in green. if truncated, show that
         # it is truncated
         # TODO send this to the UserProxyBot
@@ -46,19 +50,19 @@ async def generate_response(context: SingleTurnContext) -> None:
         )
 
     messages = []
-    messages.append({"role": "system", "content": system_prompt})
-    reportTokens(system_prompt)
-    messages.append({"role": "user", "content": user_prompt})
-    reportTokens(user_prompt)
+    messages.append({"role": "system", "content": data.system_prompt})
+    reportTokens(data.system_prompt)
+    messages.append({"role": "user", "content": data.user_prompt})
+    reportTokens(data.user_prompt)
     # Loop through each value in `args` and add it to messages alternating role between "assistant" and "user"
     role = "assistant"
-    for value in args:
+    for value in data.args:
         messages.append({"role": role, "content": value})
         reportTokens(value)
         role = "user" if role == "assistant" else "assistant"
 
     params = {
-        "model": model,
+        "model": data.model,
         "messages": messages,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "temperature": 0,
@@ -73,42 +77,46 @@ async def generate_response(context: SingleTurnContext) -> None:
     await context.yield_response(reply)
 
 
+class GenerateFile(BaseModel):
+    file: str
+    filepaths_string: str
+    shared_dependencies: str
+    prompt: str
+    model: str = DEFAULT_MODEL
+
+
 # def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
 @merger.create_bot("FileGenerator")
 async def generate_file(context: SingleTurnContext) -> None:
-    filename = context.request.content["file"]
-    model = context.request.content.get("model") or DEFAULT_MODEL
-    filepaths_string = context.request.content.get("filepaths_string")
-    shared_dependencies = context.request.content.get("shared_dependencies")
-    prompt = context.request.content.get("prompt")
+    data = GenerateFile(**context.request.content)
 
     # TODO send this to the UserProxyBot
-    print("file", filename)
+    print("file", data.file)
 
     # call openai api with this prompt
     filecode_msg = await context.get_another_bot_final_response(
         another_bot=generate_response.bot,
-        request={
-            "model": model,
-            "system_prompt": f"""You are an AI developer who is trying to write a program that will generate code \
+        request=GenerateResponse(
+            model=data.model,
+            system_prompt=f"""You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
 
-the app is: {prompt}
+the app is: {data.prompt}
 
-the files we have decided to generate are: {filepaths_string}
+the files we have decided to generate are: {data.filepaths_string}
 
-the shared dependencies (like filenames and variable names) we have decided on are: {shared_dependencies}
+the shared dependencies (like filenames and variable names) we have decided on are: {data.shared_dependencies}
 
 only write valid code for the given filepath and file type, and return only the code.
 do not add any other explanation, only return valid code for that file type.""",
-            "user_prompt": f"""We have broken up the program into per-file generation.
-Now your job is to generate only the code for the file {filename}.
+            user_prompt=f"""We have broken up the program into per-file generation.
+Now your job is to generate only the code for the file {data.file}.
 Make sure to have consistent filenames if you reference other files we are also generating.
 
 Remember that you must obey 3 things:
-   - you are generating code for the file {filename}
+   - you are generating code for the file {data.file}
    - do not stray from the names of the files and the shared dependencies we have decided on
-   - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid \
+   - MOST IMPORTANT OF ALL - the purpose of our app is {data.prompt} - every line of code you generate must be valid \
 code. Do not include code fences in your response, for example
 
 Bad response:
@@ -120,28 +128,32 @@ Good response:
 console.log("hello world")
 
 Begin generating the code now.""",
-        },
+        ).dict(),
     )
     await context.yield_response(filecode_msg.message.content)
 
 
+class SmolAI(BaseModel):
+    prompt: str
+    directory: str = DEFAULT_DIR
+    model: str = DEFAULT_MODEL
+    file: str = None
+
+
 @merger.create_bot("SmolAI")
 async def smol_ai(context: SingleTurnContext) -> None:
-    prompt = context.request.content["prompt"]
-    directory = context.request.content.get("directory") or DEFAULT_DIR
-    model = context.request.content.get("model") or DEFAULT_MODEL
-    file = context.request.content.get("file")
+    data = SmolAI(**context.request.content)
 
     # TODO send this to the UserProxyBot
     print("hi its me, 🐣the smol developer🐣! you said you wanted:")
     # print the prompt in green color
-    print("\033[92m" + prompt + "\033[0m")
+    print("\033[92m" + data.prompt + "\033[0m")
 
     # call openai api with this prompt
     filepaths_msg = await context.get_another_bot_final_response(
         another_bot=generate_response.bot,
         request={
-            "model": model,
+            "model": data.model,
             "system_prompt": """You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
 
@@ -150,7 +162,7 @@ program.
 
 only list the filepaths you would write, and return them as a python list of strings. 
 do not add any other explanation, only return a python list of strings.""",
-            "user_prompt": prompt,
+            "user_prompt": data.prompt,
         },
     )
     filepaths_string = filepaths_msg.message.content
@@ -161,16 +173,16 @@ do not add any other explanation, only return a python list of strings.""",
     async def call_file_generation_bot(_file: str) -> None:
         file_response = await context.get_another_bot_final_response(
             another_bot=generate_file.bot,
-            request={
-                "model": model,
-                "file": _file,
-                "filepaths_string": filepaths_string,
-                "shared_dependencies": shared_dependencies,
-                "prompt": prompt,
-            },
+            request=GenerateFile(
+                model=data.model,
+                file=_file,
+                filepaths_string=filepaths_string,
+                shared_dependencies=shared_dependencies,
+                prompt=data.prompt,
+            ).dict(),
         )
         filecode = file_response.message.content
-        write_file(_file, filecode, directory)
+        write_file(_file, filecode, data.directory)
 
     try:
         # parse the result into a python list
@@ -183,16 +195,16 @@ do not add any other explanation, only return a python list of strings.""",
             with open("shared_dependencies.md", "r") as shared_dependencies_file:
                 shared_dependencies = shared_dependencies_file.read()
 
-        if file is not None:
-            await call_file_generation_bot(file)
+        if data.file is not None:
+            await call_file_generation_bot(data.file)
         else:
-            clean_dir(directory)
+            clean_dir(data.directory)
 
             # understand shared dependencies
             shared_dependencies_msg = await context.get_another_bot_final_response(
                 another_bot=generate_response.bot,
                 request={
-                    "model": model,
+                    "model": data.model,
                     "system_prompt": """You are an AI developer who is trying to write a program that will \
 generate code for the user based on their intent.
 
@@ -209,7 +221,7 @@ Please name and briefly describe what is shared between the files we are generat
 variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and \
 function names.
 Exclusively focus on the names of the shared dependencies, and do not add any other explanation.""",
-                    "user_prompt": prompt,
+                    "user_prompt": data.prompt,
                 },
             )
             shared_dependencies = shared_dependencies_msg.message.content
@@ -228,14 +240,9 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             #     conv_sequence.yield_outgoing(usr_msg)
 
             # write shared dependencies as a md file inside the generated directory
-            write_file("shared_dependencies.md", shared_dependencies, directory)
+            write_file("shared_dependencies.md", shared_dependencies, data.directory)
 
-            await context.yield_response(
-                await asyncio.gather(
-                    *[call_file_generation_bot(f) for f in list_actual],
-                    return_exceptions=True,
-                )
-            )
+            await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
 
             await context.yield_response("DONE!")
     except ValueError:
@@ -266,26 +273,17 @@ def write_file(filename, filecode, directory):
 
 @merger.create_bot("MainBot")
 async def main(context: SingleTurnContext) -> None:
-    prompt = context.request.content
-    directory = DEFAULT_DIR
-    file = None
+    data = SmolAI(
+        prompt=context.request.content,
+        model="gpt-4",
+    )
 
     # read file from prompt if it ends in a .md filetype
-    if prompt.endswith(".md"):
-        with open(prompt, "r") as promptfile:
-            prompt = promptfile.read()
+    if data.prompt.endswith(".md"):
+        with open(data.prompt, "r") as promptfile:
+            data.prompt = promptfile.read()
 
-    await context.yield_from(
-        await context.trigger_another_bot(
-            another_bot=smol_ai.bot,
-            request={
-                "model": "gpt-4",
-                "directory": directory,
-                "file": file,
-                "prompt": prompt,
-            },
-        )
-    )
+    await context.yield_from(await context.trigger_another_bot(another_bot=smol_ai.bot, request=data.dict()))
 
 
 # # TODO ?

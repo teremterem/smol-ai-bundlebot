@@ -5,5 +5,6 @@ modal
 openai
 tiktoken
 promptlayer
+pydantic
 python-dotenv
 -e ../mergedbots
