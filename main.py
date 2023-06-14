@@ -228,7 +228,7 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             shared_dependencies = shared_dependencies_msg.message.content
 
             # # TODO FeedbackBot
-            await context.yield_response(shared_dependencies)
+            await context.yield_response(shared_dependencies, show_typing_indicator=True)
             # async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
             #     channel_type="bot-to-human",
             #     channel_id=str(uuid4()),
