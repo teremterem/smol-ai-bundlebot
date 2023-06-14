@@ -7,6 +7,7 @@ import discord
 import promptlayer
 import tiktoken
 from botmerger import InMemoryBotMerger, SingleTurnContext
+from botmerger.experimental.inquiry_bot import create_inquiry_bot
 from botmerger.ext.discord_integration import attach_bot_to_discord
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -227,6 +228,7 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
             shared_dependencies = shared_dependencies_msg.message.content
 
             # # TODO FeedbackBot
+            await context.yield_response(shared_dependencies)
             # async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
             #     channel_type="bot-to-human",
             #     channel_id=str(uuid4()),
@@ -302,6 +304,8 @@ async def on_ready() -> None:
     print()
 
 
+inquiry_bot = create_inquiry_bot(main.bot)
+
 if __name__ == "__main__":
-    attach_bot_to_discord(main.bot, discord_client)
+    attach_bot_to_discord(inquiry_bot, discord_client)
     discord_client.run(DISCORD_BOT_SECRET)
