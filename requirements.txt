@@ -7,4 +7,4 @@ tiktoken
 promptlayer
 pydantic
 python-dotenv
--e ../mergedbots
+-e ../botmerger
