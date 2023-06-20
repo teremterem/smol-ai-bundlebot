@@ -75,7 +75,7 @@ async def generate_response(context: SingleTurnContext) -> None:
     # Get the reply from the API response
     reply = response.choices[0]["message"]["content"]
 
-    await context.yield_response(reply)
+    await context.yield_final_response(reply)
 
 
 class GenerateFile(BaseModel):
@@ -95,11 +95,11 @@ async def generate_file(context: SingleTurnContext) -> None:
     print("file", data.file)
 
     # call openai api with this prompt
-    filecode_msg = await context.get_another_bot_final_response(
-        another_bot=generate_response.bot,
-        request=GenerateResponse(
-            model=data.model,
-            system_prompt=f"""You are an AI developer who is trying to write a program that will generate code \
+    await context.yield_final_response(
+        await generate_response.bot.get_final_response(
+            request=GenerateResponse(
+                model=data.model,
+                system_prompt=f"""You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
 
 the app is: {data.prompt}
@@ -110,7 +110,7 @@ the shared dependencies (like filenames and variable names) we have decided on a
 
 only write valid code for the given filepath and file type, and return only the code.
 do not add any other explanation, only return valid code for that file type.""",
-            user_prompt=f"""We have broken up the program into per-file generation.
+                user_prompt=f"""We have broken up the program into per-file generation.
 Now your job is to generate only the code for the file {data.file}.
 Make sure to have consistent filenames if you reference other files we are also generating.
 
@@ -129,9 +129,11 @@ Good response:
 console.log("hello world")
 
 Begin generating the code now.""",
-        ).dict(),
+            ),
+            sender=context.this_bot,
+            channel=context.channel,
+        )
     )
-    await context.yield_response(filecode_msg.message.content)
 
 
 class SmolAI(BaseModel):
@@ -151,11 +153,10 @@ async def smol_ai(context: SingleTurnContext) -> None:
     print("\033[92m" + data.prompt + "\033[0m")
 
     # call openai api with this prompt
-    filepaths_msg = await context.get_another_bot_final_response(
-        another_bot=generate_response.bot,
-        request={
-            "model": data.model,
-            "system_prompt": """You are an AI developer who is trying to write a program that will generate code \
+    filepaths_msg = await generate_response.bot.get_final_response(
+        request=GenerateResponse(
+            model=data.model,
+            system_prompt="""You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
 
 When given their intent, create a complete, exhaustive list of filepaths that the user would write to make the \
@@ -163,32 +164,35 @@ program.
 
 only list the filepaths you would write, and return them as a python list of strings. 
 do not add any other explanation, only return a python list of strings.""",
-            "user_prompt": data.prompt,
-        },
+            user_prompt=data.prompt,
+        ),
+        sender=context.this_bot,
+        channel=context.channel,
     )
-    filepaths_string = filepaths_msg.message.content
+    filepaths_string = filepaths_msg.content
 
     # TODO send this to the UserProxyBot
     print(filepaths_string)
 
     async def call_file_generation_bot(_file: str) -> None:
-        file_response = await context.get_another_bot_final_response(
-            another_bot=generate_file.bot,
+        file_response = await generate_file.bot.get_final_response(
             request=GenerateFile(
                 model=data.model,
                 file=_file,
                 filepaths_string=filepaths_string,
                 shared_dependencies=shared_dependencies,
                 prompt=data.prompt,
-            ).dict(),
+            ),
+            sender=context.this_bot,
+            channel=context.channel,
         )
-        filecode = file_response.message.content
+        filecode = file_response.content
         write_file(_file, filecode, data.directory)
 
     try:
         # parse the result into a python list
         list_actual = ast.literal_eval(filepaths_string)
-        await context.yield_response(list_actual, show_typing_indicator=True)
+        await context.yield_interim_response(list_actual)
 
         # if shared_dependencies.md is there, read it in, else set it to None
         shared_dependencies = None
@@ -202,11 +206,10 @@ do not add any other explanation, only return a python list of strings.""",
             clean_dir(data.directory)
 
             # understand shared dependencies
-            shared_dependencies_msg = await context.get_another_bot_final_response(
-                another_bot=generate_response.bot,
-                request={
-                    "model": data.model,
-                    "system_prompt": """You are an AI developer who is trying to write a program that will \
+            shared_dependencies_msg = await generate_response.bot.get_final_response(
+                request=GenerateResponse(
+                    model=data.model,
+                    system_prompt="""You are an AI developer who is trying to write a program that will \
 generate code for the user based on their intent.
 
 In response to the user's prompt:
@@ -222,13 +225,15 @@ Please name and briefly describe what is shared between the files we are generat
 variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and \
 function names.
 Exclusively focus on the names of the shared dependencies, and do not add any other explanation.""",
-                    "user_prompt": data.prompt,
-                },
+                    user_prompt=data.prompt,
+                ),
+                sender=context.this_bot,
+                channel=context.channel,
             )
-            shared_dependencies = shared_dependencies_msg.message.content
+            shared_dependencies = shared_dependencies_msg.content
 
             # # TODO FeedbackBot
-            await context.yield_response(shared_dependencies, show_typing_indicator=True)
+            await context.yield_interim_response(shared_dependencies)
             # async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
             #     channel_type="bot-to-human",
             #     channel_id=str(uuid4()),
@@ -246,10 +251,10 @@ Exclusively focus on the names of the shared dependencies, and do not add any ot
 
             await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
 
-            await context.yield_response("DONE!")
+            await context.yield_final_response("DONE!")
     except ValueError:
-        await context.yield_response("Failed to parse result", show_typing_indicator=True)
-        await context.yield_response(traceback.format_exc())
+        await context.yield_interim_response("Failed to parse result")
+        await context.yield_final_response(traceback.format_exc())
 
 
 def write_file(filename, filecode, directory):
@@ -285,7 +290,7 @@ async def main(context: SingleTurnContext) -> None:
         with open(data.prompt, "r") as promptfile:
             data.prompt = promptfile.read()
 
-    await context.yield_from(await context.trigger_another_bot(another_bot=smol_ai.bot, request=data.dict()))
+    await context.yield_from(await smol_ai.bot.trigger(data, sender=context.this_bot, channel=context.channel))
 
 
 # # TODO ?
