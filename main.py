@@ -2,17 +2,15 @@ import ast
 import asyncio
 import os
 import traceback
-from pprint import pformat
-from uuid import uuid4
 
 import discord
 import promptlayer
 import tiktoken
+from botmerger import InMemoryBotMerger, SingleTurnContext
+from botmerger.experimental.inquiry_bot import create_inquiry_bot
+from botmerger.ext.discord_integration import attach_bot_to_discord
 from dotenv import load_dotenv
-from mergedbots import InMemoryBotManager, MergedBot
-from mergedbots.experimental.sequential import ConversationSequence
-from mergedbots.experimental.two_way_bot import TwoWayBotWrapper
-from mergedbots.ext.discord_integration import MergedBotDiscord
+from pydantic import BaseModel, Field
 
 from constants import DEFAULT_DIR, DEFAULT_MODEL, DEFAULT_MAX_TOKENS
 from utils import clean_dir
@@ -28,22 +26,22 @@ openai = promptlayer.openai
 # Set up your OpenAI API credentials
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
-bot_manager = InMemoryBotManager()
+merger = InMemoryBotMerger()
 
 
-@bot_manager.create_bot("ResponseGenerator")
-async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence):
-    request = await conv_sequence.wait_for_incoming()
-    # TODO think how to implement `concurrency_limit=5`
-    # TODO wait for a "message bundle" of multiple messages (sys_prompt, user_prompt, args etc) ?
-    #  or maybe employ some sort of "FormFillingBot" ?
-    user_prompt = request.content
-    system_prompt = request.custom_fields.get("system_prompt")
-    args = request.custom_fields.get("args") or []
-    model = request.custom_fields.get("model") or DEFAULT_MODEL
+class GenerateResponse(BaseModel):
+    user_prompt: str
+    system_prompt: str
+    args: list[str] = Field(default_factory=list)
+    model: str = DEFAULT_MODEL
+
+
+@merger.create_bot("ResponseGenerator")
+async def generate_response(context: SingleTurnContext) -> None:
+    data = GenerateResponse(**context.request.content)
 
     def reportTokens(prompt):
-        encoding = tiktoken.encoding_for_model(model)
+        encoding = tiktoken.encoding_for_model(data.model)
         # print number of tokens in light gray, with first 50 characters of prompt in green. if truncated, show that
         # it is truncated
         # TODO send this to the UserProxyBot
@@ -53,19 +51,19 @@ async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence)
         )
 
     messages = []
-    messages.append({"role": "system", "content": system_prompt})
-    reportTokens(system_prompt)
-    messages.append({"role": "user", "content": user_prompt})
-    reportTokens(user_prompt)
+    messages.append({"role": "system", "content": data.system_prompt})
+    reportTokens(data.system_prompt)
+    messages.append({"role": "user", "content": data.user_prompt})
+    reportTokens(data.user_prompt)
     # Loop through each value in `args` and add it to messages alternating role between "assistant" and "user"
     role = "assistant"
-    for value in args:
+    for value in data.args:
         messages.append({"role": role, "content": value})
         reportTokens(value)
         role = "user" if role == "assistant" else "assistant"
 
     params = {
-        "model": model,
+        "model": data.model,
         "messages": messages,
         "max_tokens": DEFAULT_MAX_TOKENS,
         "temperature": 0,
@@ -77,55 +75,49 @@ async def generate_response(bot: MergedBot, conv_sequence: ConversationSequence)
     # Get the reply from the API response
     reply = response.choices[0]["message"]["content"]
 
-    conv_sequence.yield_outgoing(await request.final_bot_response(bot, reply))
+    await context.yield_final_response(reply)
+
+
+class GenerateFile(BaseModel):
+    file: str
+    filepaths_string: str
+    shared_dependencies: str
+    prompt: str
+    model: str = DEFAULT_MODEL
 
 
 # def generate_file(filename, model=DEFAULT_MODEL, filepaths_string=None, shared_dependencies=None, prompt=None):
-@bot_manager.create_bot("FileGenerator")
-async def generate_file(bot: MergedBot, conv_sequence: ConversationSequence):
-    request = await conv_sequence.wait_for_incoming()
-    # TODO wait for a "message bundle" of multiple messages ?
-    #  or maybe employ some sort of "FormFillingBot" ?
-    filename = request.content
-    model = request.custom_fields.get("model") or DEFAULT_MODEL
-    filepaths_string = request.custom_fields.get("filepaths_string")
-    shared_dependencies = request.custom_fields.get("shared_dependencies")
-    prompt = request.custom_fields.get("prompt")
+@merger.create_bot("FileGenerator")
+async def generate_file(context: SingleTurnContext) -> None:
+    data = GenerateFile(**context.request.content)
 
     # TODO send this to the UserProxyBot
-    print("file", filename)
+    print("file", data.file)
 
     # call openai api with this prompt
-    filecode_msg = await generate_response.bot.get_final_response(
-        # TODO send this as a "message bundle"
-        await bot.manager.create_originator_message(
-            channel_type="bot-to-bot",
-            channel_id=str(uuid4()),
-            originator=bot,
-            custom_fields={
-                "human_channel_type": request.custom_fields["human_channel_type"],
-                "human_channel_id": request.custom_fields["human_channel_id"],
-                "model": model,
-                "system_prompt": f"""You are an AI developer who is trying to write a program that will generate code for the user based on \
-their intent.
+    await context.yield_final_response(
+        await generate_response.bot.get_final_response(
+            request=GenerateResponse(
+                model=data.model,
+                system_prompt=f"""You are an AI developer who is trying to write a program that will generate code \
+for the user based on their intent.
 
-the app is: {prompt}
+the app is: {data.prompt}
 
-the files we have decided to generate are: {filepaths_string}
+the files we have decided to generate are: {data.filepaths_string}
 
-the shared dependencies (like filenames and variable names) we have decided on are: {shared_dependencies}
+the shared dependencies (like filenames and variable names) we have decided on are: {data.shared_dependencies}
 
 only write valid code for the given filepath and file type, and return only the code.
 do not add any other explanation, only return valid code for that file type.""",
-            },
-            content=f"""We have broken up the program into per-file generation.
-Now your job is to generate only the code for the file {filename}.
+                user_prompt=f"""We have broken up the program into per-file generation.
+Now your job is to generate only the code for the file {data.file}.
 Make sure to have consistent filenames if you reference other files we are also generating.
 
 Remember that you must obey 3 things:
-   - you are generating code for the file {filename}
+   - you are generating code for the file {data.file}
    - do not stray from the names of the files and the shared dependencies we have decided on
-   - MOST IMPORTANT OF ALL - the purpose of our app is {prompt} - every line of code you generate must be valid \
+   - MOST IMPORTANT OF ALL - the purpose of our app is {data.prompt} - every line of code you generate must be valid \
 code. Do not include code fences in your response, for example
 
 Bad response:
@@ -137,38 +129,34 @@ Good response:
 console.log("hello world")
 
 Begin generating the code now.""",
+            ),
+            sender=context.this_bot,
+            channel=context.channel,
         )
     )
 
-    conv_sequence.yield_outgoing(await request.interim_bot_response(bot, filename))
-    conv_sequence.yield_outgoing(await request.final_bot_response(bot, filecode_msg.content))
+
+class SmolAI(BaseModel):
+    prompt: str
+    directory: str = DEFAULT_DIR
+    model: str = DEFAULT_MODEL
+    file: str = None
 
 
-@bot_manager.create_bot("SmolAI")
-async def smol_ai(bot: MergedBot, conv_sequence: ConversationSequence):
-    request = await conv_sequence.wait_for_incoming()
-    prompt = request.content
-    directory = request.custom_fields.get("directory") or DEFAULT_DIR
-    model = request.custom_fields.get("model") or DEFAULT_MODEL
-    file = request.custom_fields.get("file")
+@merger.create_bot("SmolAI")
+async def smol_ai(context: SingleTurnContext) -> None:
+    data = SmolAI(**context.request.content)
 
     # TODO send this to the UserProxyBot
     print("hi its me, 🐣the smol developer🐣! you said you wanted:")
     # print the prompt in green color
-    print("\033[92m" + prompt + "\033[0m")
+    print("\033[92m" + data.prompt + "\033[0m")
 
     # call openai api with this prompt
     filepaths_msg = await generate_response.bot.get_final_response(
-        # TODO send this as a "message bundle"
-        await bot.manager.create_originator_message(
-            channel_type="bot-to-bot",
-            channel_id=str(uuid4()),
-            originator=bot,
-            custom_fields={
-                "human_channel_type": request.custom_fields["human_channel_type"],
-                "human_channel_id": request.custom_fields["human_channel_id"],
-                "model": model,
-                "system_prompt": """You are an AI developer who is trying to write a program that will generate code \
+        request=GenerateResponse(
+            model=data.model,
+            system_prompt="""You are an AI developer who is trying to write a program that will generate code \
 for the user based on their intent.
 
 When given their intent, create a complete, exhaustive list of filepaths that the user would write to make the \
@@ -176,9 +164,10 @@ program.
 
 only list the filepaths you would write, and return them as a python list of strings. 
 do not add any other explanation, only return a python list of strings.""",
-            },
-            content=prompt,
-        )
+            user_prompt=data.prompt,
+        ),
+        sender=context.this_bot,
+        channel=context.channel,
     )
     filepaths_string = filepaths_msg.content
 
@@ -186,30 +175,24 @@ do not add any other explanation, only return a python list of strings.""",
     print(filepaths_string)
 
     async def call_file_generation_bot(_file: str) -> None:
-        file_responses = await generate_file.bot.list_responses(
-            # TODO send this as a "message bundle"
-            await bot.manager.create_originator_message(
-                channel_type="bot-to-bot",
-                channel_id=str(uuid4()),
-                originator=bot,
-                content=_file,
-                custom_fields={
-                    "human_channel_type": request.custom_fields["human_channel_type"],
-                    "human_channel_id": request.custom_fields["human_channel_id"],
-                    "model": model,
-                    "filepaths_string": filepaths_string,
-                    "shared_dependencies": shared_dependencies,
-                    "prompt": prompt,
-                },
-            )
+        file_response = await generate_file.bot.get_final_response(
+            request=GenerateFile(
+                model=data.model,
+                file=_file,
+                filepaths_string=filepaths_string,
+                shared_dependencies=shared_dependencies,
+                prompt=data.prompt,
+            ),
+            sender=context.this_bot,
+            channel=context.channel,
         )
-        filename = file_responses[0].content
-        filecode = file_responses[1].content
-        write_file(filename, filecode, directory)
+        filecode = file_response.content
+        write_file(_file, filecode, data.directory)
 
     try:
         # parse the result into a python list
         list_actual = ast.literal_eval(filepaths_string)
+        await context.yield_interim_response(list_actual)
 
         # if shared_dependencies.md is there, read it in, else set it to None
         shared_dependencies = None
@@ -217,23 +200,16 @@ do not add any other explanation, only return a python list of strings.""",
             with open("shared_dependencies.md", "r") as shared_dependencies_file:
                 shared_dependencies = shared_dependencies_file.read()
 
-        if file is not None:
-            await call_file_generation_bot(file)
+        if data.file is not None:
+            await call_file_generation_bot(data.file)
         else:
-            clean_dir(directory)
+            clean_dir(data.directory)
 
             # understand shared dependencies
             shared_dependencies_msg = await generate_response.bot.get_final_response(
-                # TODO send this as a "message bundle"
-                await bot.manager.create_originator_message(
-                    channel_type="bot-to-bot",
-                    channel_id=str(uuid4()),
-                    originator=bot,
-                    custom_fields={
-                        "human_channel_type": request.custom_fields["human_channel_type"],
-                        "human_channel_id": request.custom_fields["human_channel_id"],
-                        "model": model,
-                        "system_prompt": """You are an AI developer who is trying to write a program that will \
+                request=GenerateResponse(
+                    model=data.model,
+                    system_prompt="""You are an AI developer who is trying to write a program that will \
 generate code for the user based on their intent.
 
 In response to the user's prompt:
@@ -249,41 +225,36 @@ Please name and briefly describe what is shared between the files we are generat
 variables, data schemas, id names of every DOM elements that javascript functions will use, message names, and \
 function names.
 Exclusively focus on the names of the shared dependencies, and do not add any other explanation.""",
-                    },
-                    content=prompt,
-                )
+                    user_prompt=data.prompt,
+                ),
+                sender=context.this_bot,
+                channel=context.channel,
             )
             shared_dependencies = shared_dependencies_msg.content
 
-            async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
-                channel_type="bot-to-human",
-                channel_id=str(uuid4()),
-                originator=bot,
-                content=shared_dependencies,
-                custom_fields={
-                    "human_channel_type": request.custom_fields["human_channel_type"],
-                    "human_channel_id": request.custom_fields["human_channel_id"],
-                },
-            )):
-                conv_sequence.yield_outgoing(usr_msg)
+            # # TODO FeedbackBot
+            await context.yield_interim_response(shared_dependencies)
+            # async for usr_msg in bot.manager.fulfill("FeedbackBot", await bot.manager.create_originator_message(
+            #     channel_type="bot-to-human",
+            #     channel_id=str(uuid4()),
+            #     originator=bot,
+            #     content=shared_dependencies,
+            #     custom_fields={
+            #         "human_channel_type": request.custom_fields["human_channel_type"],
+            #         "human_channel_id": request.custom_fields["human_channel_id"],
+            #     },
+            # )):
+            #     conv_sequence.yield_outgoing(usr_msg)
 
             # write shared dependencies as a md file inside the generated directory
-            write_file("shared_dependencies.md", shared_dependencies, directory)
+            write_file("shared_dependencies.md", shared_dependencies, data.directory)
 
-            conv_sequence.yield_outgoing(
-                await request.interim_bot_response(
-                    bot,
-                    pformat(await asyncio.gather(
-                        *[call_file_generation_bot(f) for f in list_actual],
-                        return_exceptions=True,
-                    )),
-                )
-            )
+            await asyncio.gather(*[call_file_generation_bot(f) for f in list_actual])
 
-            conv_sequence.yield_outgoing(await request.final_bot_response(bot, "DONE!"))
+            await context.yield_final_response("DONE!")
     except ValueError:
-        conv_sequence.yield_outgoing(await request.interim_bot_response(bot, "Failed to parse result"))
-        conv_sequence.yield_outgoing(await request.final_bot_response(bot, traceback.format_exc()))
+        await context.yield_interim_response("Failed to parse result")
+        await context.yield_final_response(traceback.format_exc())
 
 
 def write_file(filename, filecode, directory):
@@ -307,42 +278,28 @@ def write_file(filename, filecode, directory):
         file.write(filecode)
 
 
-@bot_manager.create_bot("MainBot")
-async def main(bot: MergedBot, conv_sequence: ConversationSequence):
-    prompt_msg = await conv_sequence.wait_for_incoming()
-    prompt = prompt_msg.content
-    directory = DEFAULT_DIR
-    file = None
+@merger.create_bot("MainBot")
+async def main(context: SingleTurnContext) -> None:
+    data = SmolAI(
+        prompt=context.request.content,
+        model="gpt-4",
+    )
 
     # read file from prompt if it ends in a .md filetype
-    if prompt.endswith(".md"):
-        with open(prompt, "r") as promptfile:
-            prompt = promptfile.read()
+    if data.prompt.endswith(".md"):
+        with open(data.prompt, "r") as promptfile:
+            data.prompt = promptfile.read()
 
-    user_message = await bot.manager.create_originator_message(
-        channel_type="bot-to-bot",
-        channel_id=str(uuid4()),
-        originator=bot,
-        content=prompt,
-        custom_fields={
-            "human_channel_type": prompt_msg.channel_type,
-            "human_channel_id": prompt_msg.channel_id,
-            "model": "gpt-4",
-            "directory": directory,
-            "file": file,
-        },
-    )
-    # Run the main function
-    async for response in smol_ai.bot.fulfill(user_message):
-        conv_sequence.yield_outgoing(response)
+    await context.yield_from(await smol_ai.bot.trigger(data, sender=context.this_bot, channel=context.channel))
 
 
-two_way_bot_wrapper = TwoWayBotWrapper(
-    manager=bot_manager,
-    this_bot_handle="TwoWayBot",
-    target_bot_handle=main.bot.handle,
-    feedback_bot_handle="FeedbackBot",
-)
+# # TODO ?
+# two_way_bot_wrapper = TwoWayBotWrapper(
+#     manager=bot_manager,
+#     this_bot_handle="TwoWayBot",
+#     target_bot_handle=main.bot.handle,
+#     feedback_bot_handle="FeedbackBot",
+# )
 
 
 @discord_client.event
@@ -352,6 +309,8 @@ async def on_ready() -> None:
     print()
 
 
+inquiry_bot = create_inquiry_bot(main.bot)
+
 if __name__ == "__main__":
-    MergedBotDiscord(bot=two_way_bot_wrapper.this_bot, discord_client=discord_client)
+    attach_bot_to_discord(inquiry_bot, discord_client)
     discord_client.run(DISCORD_BOT_SECRET)
