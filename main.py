@@ -128,9 +128,7 @@ Good response:
 console.log("hello world")
 
 Begin generating the code now.""",
-            ),
-            sender=context.this_bot,
-            channel=context.channel,
+            )
         )
     )
 
@@ -164,9 +162,7 @@ program.
 only list the filepaths you would write, and return them as a python list of strings. 
 do not add any other explanation, only return a python list of strings.""",
             user_prompt=data.prompt,
-        ),
-        sender=context.this_bot,
-        channel=context.channel,
+        )
     )
     filepaths_string = filepaths_msg.content
 
@@ -181,9 +177,7 @@ do not add any other explanation, only return a python list of strings.""",
                 filepaths_string=filepaths_string,
                 shared_dependencies=shared_dependencies,
                 prompt=data.prompt,
-            ),
-            sender=context.this_bot,
-            channel=context.channel,
+            )
         )
         filecode = file_response.content
         write_file(_file, filecode, data.directory)
@@ -225,9 +219,7 @@ variables, data schemas, id names of every DOM elements that javascript function
 function names.
 Exclusively focus on the names of the shared dependencies, and do not add any other explanation.""",
                     user_prompt=data.prompt,
-                ),
-                sender=context.this_bot,
-                channel=context.channel,
+                )
             )
             shared_dependencies = shared_dependencies_msg.content
 
@@ -289,7 +281,7 @@ async def main(context: SingleTurnContext) -> None:
         with open(data.prompt, "r") as promptfile:
             data.prompt = promptfile.read()
 
-    await context.yield_from(await smol_ai.bot.trigger(data, sender=context.this_bot, channel=context.channel))
+    await context.yield_from(await smol_ai.bot.trigger(data))
 
 
 # # TODO ?
